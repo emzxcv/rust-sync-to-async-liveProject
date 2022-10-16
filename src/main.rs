@@ -19,6 +19,35 @@ struct Opts {
     from: String,
 }
 
+struct StockStats {
+    symbol: String,
+    last_price: f64,
+    pct_change: f64,
+    period_min: f64,
+    period_max: f64,
+    sma: Vec<f64>,
+}
+
+impl StockStats {
+    async fn new(
+        symbol: String,
+        last_price: f64,
+        pct_change: f64,
+        period_min: f64,
+        period_max: f64,
+        sma: Vec<f64>,
+    ) -> Self {
+        StockStats {
+            symbol,
+            last_price,
+            pct_change,
+            period_min,
+            period_max,
+            sma,
+        }
+    }
+}
+
 #[async_trait]
 trait AsyncStockSignal {
     ///
@@ -164,7 +193,7 @@ async fn fetch_symbol_data(
     symbol: &str,
     from: &DateTime<Utc>,
     to: &DateTime<Utc>,
-) -> std::io::Result<()> {
+) -> std::io::Result<Option<StockStats>> {
     let diff = PriceDifference {};
     let min = MinPrice {};
     let max = MaxPrice {};
@@ -178,19 +207,20 @@ async fn fetch_symbol_data(
         let (_, pct_change) = diff.calculate(&closes).await.unwrap_or((0.0, 0.0));
         let sma = window.calculate(&closes).await.unwrap_or_default();
 
-        // a simple way to output CSV data
-        println!(
-            "{},{},${:.2},{:.2}%,${:.2},${:.2},${:.2}",
-            from.to_rfc3339(),
-            symbol,
+        let stats = StockStats::new(
+            symbol.to_owned(),
             last_price,
-            pct_change * 100.0,
+            pct_change,
             period_min,
             period_max,
-            sma.last().unwrap_or(&0.0)
-        );
+            sma,
+        )
+        .await;
+
+        Ok(Some(stats))
+    } else {
+        Ok(None)
     }
-    Ok(())
 }
 
 #[async_std::main]
@@ -207,7 +237,27 @@ async fn main() -> std::io::Result<()> {
         let fetched = data
             .iter()
             .map(|symbol| fetch_symbol_data(symbol, &from, &to));
-        future::join_all(fetched).await;
+        let responses = future::join_all(fetched).await;
+
+        for response in responses {
+            match response{
+                Ok(Some(stock)) => {
+                    println!(
+                        "{},{},${:.2},{:.2}%,${:.2},${:.2},${:.2}",
+                        from.to_rfc3339(),
+                        stock.symbol,
+                        stock.last_price,
+                        stock.pct_change,
+                        stock.period_min,
+                        stock.period_max,
+                        *stock.sma.last().unwrap_or(&0.0),
+                    )
+                }
+                Ok(None) => {},
+                Err(_) => todo!()
+            }
+            
+        }
         thread::sleep(thirty_seconds);
     }
 }
