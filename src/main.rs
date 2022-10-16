@@ -1,8 +1,12 @@
+use async_trait::async_trait;
 use chrono::prelude::*;
 use clap::Parser;
 use std::io::{Error, ErrorKind};
+use std::{thread, time};
 use yahoo_finance_api as yahoo;
-use async_trait::async_trait;
+use futures::future;
+
+
 
 #[derive(Parser, Debug)]
 #[clap(
@@ -158,43 +162,55 @@ async fn fetch_closing_data(
     }
 }
 
+async fn fetch_symbol_data(
+    symbol: &str,
+    from: &DateTime<Utc>,
+    to: &DateTime<Utc>,
+) -> std::io::Result<()> {
+    let diff = PriceDifference {};
+    let min = MinPrice {};
+    let max = MaxPrice {};
+    let window = WindowedSMA { window_size: 30 };
+    let closes = fetch_closing_data(&symbol, &from, &to).await?;
+    if !closes.is_empty() {
+        // min/max of the period. unwrap() because those are Option types
+        let period_max: f64 = max.calculate(&closes).await.unwrap();
+        let period_min: f64 = min.calculate(&closes).await.unwrap();
+        let last_price = *closes.last().unwrap_or(&0.0);
+        let (_, pct_change) = diff.calculate(&closes).await.unwrap_or((0.0, 0.0));
+        let sma = window.calculate(&closes).await.unwrap_or_default();
+
+        // a simple way to output CSV data
+        println!(
+            "{},{},${:.2},{:.2}%,${:.2},${:.2},${:.2}",
+            from.to_rfc3339(),
+            symbol,
+            last_price,
+            pct_change * 100.0,
+            period_min,
+            period_max,
+            sma.last().unwrap_or(&0.0)
+        );
+    }
+    Ok(())
+}
+
 #[async_std::main]
 async fn main() -> std::io::Result<()> {
     let opts = Opts::parse();
     let from: DateTime<Utc> = opts.from.parse().expect("Couldn't parse 'from' date");
     let to = Utc::now();
 
-
-    let diff = PriceDifference{};
-    let min = MinPrice{};
-    let max = MaxPrice{};
-    let window = WindowedSMA { window_size: 30 };
+    let thirty_seconds = time::Duration::from_secs(30);
     // a simple way to output a CSV header
-    println!("period start,symbol,price,change %,min,max,30d avg");
-    for symbol in opts.symbols.split(',') {
-        let closes = fetch_closing_data(&symbol, &from, &to).await?;
-        if !closes.is_empty() {
-            // min/max of the period. unwrap() because those are Option types
-            let period_max: f64 = max.calculate(&closes).await.unwrap();
-            let period_min: f64 = min.calculate(&closes).await.unwrap();
-            let last_price = *closes.last().unwrap_or(&0.0);
-            let (_, pct_change) = diff.calculate(&closes).await.unwrap_or((0.0, 0.0));
-            let sma = window.calculate(&closes).await.unwrap_or_default();
+    loop {
+        println!("period start,symbol,price,change %,min,max,30d avg");
 
-            // a simple way to output CSV data
-            println!(
-                "{},{},${:.2},{:.2}%,${:.2},${:.2},${:.2}",
-                from.to_rfc3339(),
-                symbol,
-                last_price,
-                pct_change * 100.0,
-                period_min,
-                period_max,
-                sma.last().unwrap_or(&0.0)
-            );
-        }
+        let data: Vec<&str> = opts.symbols.split(',').collect();
+        let fetched = data.iter().map(|symbol| fetch_symbol_data(symbol, &from, &to));
+        future::join_all(fetched).await;
+        thread::sleep(thirty_seconds);
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -209,7 +225,9 @@ mod tests {
         assert_eq!(signal.calculate(&[1.0]).await, Some((0.0, 0.0)));
         assert_eq!(signal.calculate(&[1.0, 0.0]).await, Some((-1.0, -1.0)));
         assert_eq!(
-            signal.calculate(&[2.0, 3.0, 5.0, 6.0, 1.0, 2.0, 10.0]).await,
+            signal
+                .calculate(&[2.0, 3.0, 5.0, 6.0, 1.0, 2.0, 10.0])
+                .await,
             Some((8.0, 4.0))
         );
         assert_eq!(
@@ -225,7 +243,9 @@ mod tests {
         assert_eq!(signal.calculate(&[1.0]).await, Some(1.0));
         assert_eq!(signal.calculate(&[1.0, 0.0]).await, Some(0.0));
         assert_eq!(
-            signal.calculate(&[2.0, 3.0, 5.0, 6.0, 1.0, 2.0, 10.0]).await,
+            signal
+                .calculate(&[2.0, 3.0, 5.0, 6.0, 1.0, 2.0, 10.0])
+                .await,
             Some(1.0)
         );
         assert_eq!(
@@ -241,7 +261,9 @@ mod tests {
         assert_eq!(signal.calculate(&[1.0]).await, Some(1.0));
         assert_eq!(signal.calculate(&[1.0, 0.0]).await, Some(1.0));
         assert_eq!(
-            signal.calculate(&[2.0, 3.0, 5.0, 6.0, 1.0, 2.0, 10.0]).await,
+            signal
+                .calculate(&[2.0, 3.0, 5.0, 6.0, 1.0, 2.0, 10.0])
+                .await,
             Some(10.0)
         );
         assert_eq!(
