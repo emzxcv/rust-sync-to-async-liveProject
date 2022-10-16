@@ -1,12 +1,10 @@
 use async_trait::async_trait;
 use chrono::prelude::*;
 use clap::Parser;
+use futures::future;
 use std::io::{Error, ErrorKind};
 use std::{thread, time};
 use yahoo_finance_api as yahoo;
-use futures::future;
-
-
 
 #[derive(Parser, Debug)]
 #[clap(
@@ -203,11 +201,12 @@ async fn main() -> std::io::Result<()> {
 
     let thirty_seconds = time::Duration::from_secs(30);
     // a simple way to output a CSV header
+    println!("period start,symbol,price,change %,min,max,30d avg");
     loop {
-        println!("period start,symbol,price,change %,min,max,30d avg");
-
         let data: Vec<&str> = opts.symbols.split(',').collect();
-        let fetched = data.iter().map(|symbol| fetch_symbol_data(symbol, &from, &to));
+        let fetched = data
+            .iter()
+            .map(|symbol| fetch_symbol_data(symbol, &from, &to));
         future::join_all(fetched).await;
         thread::sleep(thirty_seconds);
     }
